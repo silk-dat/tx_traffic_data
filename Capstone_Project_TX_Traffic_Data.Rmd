@@ -1,0 +1,463 @@
+---
+title: "Capstone Project: Texas Traffic Data"
+author: "Stiina Kilk"
+date: "1/5/2021"
+
+output: 
+  pdf_document:
+  latex_engine: xelatex
+  toc: TRUE
+  toc_depth: 2
+  number_sections: true
+---
+
+
+
+### Overview
+
+The purpose of this report is to introduce the reader to the machine learning project completed within the course "HarvardX Professional Certificate in Data Science".
+The data set consists of information about traffic accidents, which occurred in Texas from February 2016 to June 2020. The full dataset, which covers 49 states can be found here: https://arxiv.org/abs/1906.05409. The original datase has 49 variables ranging from coordinates of the accident to near-by traffic signs and weather condition. Each row contains information about a car accident, which has been evaluated by a level of severity. The goal of this project is to predict the severity of a car accident based on the variables. Most of the variables can be monitored in real time.
+First part of the report is the data cleaning. After that an analysis and visual exploration of the data is carried out along with explanations. Then the removal of unuseful variables is needed to take place before getting started with model building. Four machine learning algorithms are used in order to achieve the goal along with explanations. Finally, the author will conclude the report with a brief summary.
+
+
+### Data cleaning
+
+#### Loading neccessary packages
+
+```{r loading packages, warning=FALSE, message=FALSE}
+#downloading and loading necessary packages
+
+if (!require(tidyverse)) install.packages('tidyverse')
+library(tidyverse)
+if (!require(caret)) install.packages('caret')
+library(caret)
+if (!require(data.table)) install.packages('data.table')
+library(data.table)
+if (!require(dslabs)) install.packages('dslabs')
+library(dslabs)
+if (!require(ggplot2)) install.packages('ggplot2')
+library(ggplot2)
+if (!require(dplyr)) install.packages('dplyr')
+library(dplyr)
+if (!require(stringr)) install.packages('stringr')
+library(stringr)
+if (!require(knitr)) install.packages('knitr')
+library(knitr)
+if (!require(readr)) install.packages('readr')
+library(readr)
+if (!require(grDevices)) install.packages('grDevices')
+library(grDevices)
+if (!require(stats)) install.packages('stats')
+library(stats)
+if (!require(lubridate)) install.packages('lubridate')
+library(lubridate)
+if (!require(corrplot)) install.packages('corrplot')
+library(corrplot)
+if (!require(matrixStats)) install.packages('matrixStats')
+library(matrixStats)
+if (!require(ModelMetrics)) install.packages('ModelMetrics')
+library(ModelMetrics)
+if (!require(xgboost)) install.packages('xgboost')
+library(xgboost)
+
+```
+
+
+#### Downloading dataset
+
+The original dataset is filtered to include only the observations about the state of Texas.
+
+```{r download data, warning=FALSE, message=FALSE, cache=TRUE}
+#filtered to only include accidents in TX
+
+#download required packages
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if(!require(utils)) install.packages("utils", repos = "http://cran.us.r-project.org")
+
+#download zip file from author's github repo and unzip file
+temp <- tempfile()
+download.file("https://github.com/silk-dat/us_traffic_data/raw/main/TX_car_accidents.csv.zip",temp)
+my_data <- read_csv(unz(temp, "TX_car_accidents.csv"))
+unlink(temp)
+remove(temp)
+```
+
+
+#### Data cleaning
+
+Data class needs to be changed from tibble to data frame to make it easier to work with.
+
+```{r change type, warning=FALSE, message=FALSE}
+my_data <- as.data.frame(my_data)
+```
+
+
+The symbols included in the names of the columns make it hard to use them in the code. Column names are changed in the next step.
+
+```{r show and change column names, warning=FALSE, message=FALSE}
+colnames(my_data)
+
+names(my_data)[names(my_data) == "Temperature(F)"] <- "Temperature"
+names(my_data)[names(my_data) == "Humidity(%)"] <- "Humidity"
+names(my_data)[names(my_data) == "Pressure(in)"] <- "Pressure"
+names(my_data)[names(my_data) == "Visibility(mi)"] <- "Visibility"
+```
+
+
+Here the relevant variables are chosen. The chosen variables are all avaiable to monitor in real time. Variables naming the city and county are removed since coordinates and the zipcode of the accidents are included. There are many variables specifying the weather conditions from which the most important ones are preserved. All the variables describing traffic signs and road conditions are chosen.
+
+```{r select relevant variables, warning=FALSE, message=FALSE}
+my_data <- my_data %>% select(Start_Time, Start_Lat, Start_Lng, Zipcode,                                Temperature, Visibility,
+                              Amenity, Bump, Crossing, Give_Way, Junction,                               No_Exit, Railway, 
+                              Roundabout, Stop, Severity, Traffic_Signal)
+```
+
+
+Here we see which variables need to be formatted for the machine learning algorithms.
+
+```{r summary of variables, echo=FALSE, warning=FALSE, message=FALSE}
+summary(my_data)
+```
+
+Rows with missing values will be removed. In the next step, 2,2% of the data is removed due to missing values. First row shows the number of observations with missing values and the second row is without the missing values.
+
+```{r summary of var, echo=FALSE, warning=FALSE, message=FALSE}
+nrow(my_data)
+my_data <- na.omit(my_data)
+nrow(my_data)
+```
+
+Zipcodes may have an added 4 digits to speficy the location, which will need to be removed to format this varibale. Summary showed that this variable is a character type and needs to be changed into numeric type.
+
+```{r change zipcode column, warning=FALSE, message=FALSE}
+my_data$Zipcode <- gsub(my_data$Zipcode, pattern="-.*", replacement = "")
+all(str_length(my_data$Zipcode) == 5)
+my_data$Zipcode <- as.numeric(my_data$Zipcode)
+
+```
+
+
+Start_Time column in it's current form is not very descriptive. In the next step this column will be divided into 4 further columns: Month, Week, Day and Hour.
+
+```{r change Start_Time column, warning=FALSE, message=FALSE}
+my_data <- my_data %>% mutate(Month = month(as.Date(Start_Time)))
+my_data <- my_data %>% mutate(Week = week(as.Date(Start_Time)))
+my_data <- my_data %>% mutate(Day = day(as.Date(Start_Time)))
+my_data <- my_data %>% mutate(Hour = hour(my_data$Start_Time))
+
+my_data <- my_data[,-1]
+```
+
+
+According to the summary the maximum tenperature is 161.60 F and minimum is -40 F. Neither of these temperatures are possible in Texas. The highest temperature in Texas during the period included in the data is 112 F. Any temperatures higher than that will be removed. 25 rows are removed.
+
+
+```{r remove high temperatures, warning=FALSE, message=FALSE}
+#check the unique values 
+unique(my_data$Temperature)
+
+#how many rows will need to be removed.
+my_data %>% filter(Temperature > 112) %>% nrow()
+
+#remove the rows
+r <- with(my_data, which(Temperature > 112, arr.ind = TRUE))
+my_data <- my_data[-r,]
+```
+
+
+As is visible above, rows showing tempareture of -40 F have to be removed. Only one row inlcudes this temperature and is removed in the next step.
+
+```{r remove low temperatures, warning=FALSE, message=FALSE}
+my_data %>% filter(Temperature == -40) %>% nrow()
+
+#remove the rows
+r <- with(my_data, which(Temperature == -40, arr.ind = TRUE))
+my_data <- my_data[-r,]
+```
+
+
+Visibility of 111 mi is illogical. Dust, vaopur and pollution in the air will rarely let you see more than 13mi. All readings below that point are removed. 
+
+```{r clean Visibility , warning=FALSE, message=FALSE}
+summary(my_data$Visibility)
+#how many rows will be removed
+my_data %>% filter(Visibility > 13) %>% nrow()
+#remove rows
+r <- with(my_data, which(Visibility > 13, arr.ind = TRUE))
+my_data <- my_data[-r,]
+```
+
+
+
+```{r move label column , echo=FALSE, warning=FALSE, message=FALSE}
+my_data <- my_data %>% relocate(Severity)
+```
+
+
+
+### Data Exploration
+
+The data consist of 317 381 observations or rows and have 21 variables. The variables are in different formats: numerical, character and logical. Each row describes a car accident and has been evaluated with a severity from 1 to 4, where 1 indicates the least impact to traffic (a short delay as a result of the traffic) and 4 indicates a significant impact on the traffic (long delay).
+
+```{r overview , warning=FALSE, message=FALSE, echo=FALSE}
+head(my_data)
+nrow(my_data)
+ncol(my_data)
+```
+
+
+The distribution plot shows that most of the accidents have a level 2 longetivity. Accidents creating the least amount of chaos are also the fewest according to the plot. 
+
+```{r severity distribution , warning=FALSE, message=FALSE, echo=FALSE}
+my_data %>% group_by(Severity) %>%
+  summarise(Count = n()) %>%
+  ggplot(aes(Severity, Count)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Severity") 
+```
+
+
+Latitude and longitude seem to be a an indication for the level of severity. As expected from the distribution of severity, level 1 takes up the least space within the coordinates, but the locations of the accidents are also clustered around certain points. The areas for levels 3 and 4 are quite similar, while level 2 shows a more diffused picture.
+
+```{r coordinates to severity , warning=FALSE, message=FALSE, cache=TRUE}
+my_data %>% 
+  ggplot(aes(Start_Lat, Start_Lng, color = Severity)) +
+  geom_point(size = 1) +
+  facet_wrap(~ Severity, nrow = 2)
+```
+
+
+Zipcode is another location based variable, but provides a wider view. Level 1 severity has many outliers, which form some kind of clusters confirming the conclusion drawn from the above plot. Level 2 severity shows more variability than 3 and 4, but the most common zipcodes for all three are not far apart.
+
+```{r Zipcode to severity , warning=FALSE, message=FALSE}
+my_data %>% 
+ ggplot(aes(Severity, Zipcode)) +
+  geom_boxplot(aes(fill = factor(Severity, levels = c(1, 2, 3, 4)))) +
+  labs(fill = "Severity")
+```
+
+
+According to the correlation matrix, temperature at the time of the accident influences the severity more than visibility. Weather in Texas can be as hot as literal hell in the summer months and this can have an impact on the driver's alertness while driving. Also, it is uncommon to have poor visibility as cold weather conditions such as snow and ice are unusual.
+
+```{r cor matrix weather , warning=FALSE, message=FALSE}
+#select wather variables
+weather <- my_data %>% select(Temperature, Visibility, Severity)
+#create correlation matrix
+weather_cor <- cor(weather)
+#display matrix
+corrplot(abs(cor(weather_cor)), method="color", tl.pos="lt", cl.lim = c(0,1))
+```
+
+
+Week variable seems to have the most impact on the severity of the accident.
+
+```{r cor date and time , warning=FALSE, message=FALSE}
+#select variables
+datetime <- my_data %>% select(Month, Week, Day, Hour, Severity)
+#create correlation matrix
+datetime_cor <- cor(datetime)
+#display matrix
+corrplot(abs(cor(datetime_cor)), method="color", tl.pos="lt", cl.lim = c(0,1))
+```
+
+
+The presence of a traffic signal or traffic light at the vincinity of the accident correlates most with the severity of the accident. 
+
+```{r cor road signs , warning=FALSE, message=FALSE}
+#select variables
+road <- my_data %>% select(Amenity, Bump, Crossing, Give_Way, Junction,
+                           No_Exit, Railway, Roundabout, Stop, Traffic_Signal, Severity)
+#create correlation matrix
+road_cor <- cor(road)
+#display matrix
+corrplot(abs(cor(road_cor)), method="color", tl.pos="lt", cl.lim = c(0,1))
+
+```
+
+
+
+### Modelling
+
+#### Data splitting
+
+Dataset is split into two parts: training set and test set. Models are trained on the training set to find the best prediction and this model is then run on test set. This is done to evaluate the model with data that was not used for training the model. Since the dataset is fairly big, splits 70/30 and 80/20 were tried on the models and 70/30 gave the best results.
+
+```{r data splitting, warning=FALSE, message=FALSE}
+#reproducible data
+set.seed(1, sample.kind="Rounding")
+
+#split the data
+test_index <- createDataPartition(factor(my_data$Severity, levels = c(1, 2, 3, 4)), times = 1, p = 0.7, list = FALSE)
+train_set <- my_data[test_index, ]
+test_set <- my_data[-test_index, ]
+
+#separate features and label for preprocessing
+x_train <- train_set[,-1]
+y_train <- factor(train_set[,1])
+
+x_test <- test_set[,-1]
+y_test <- factor(test_set[,1])
+```
+
+
+#### Preprocessing
+
+Preprocessing is a step in machine learning, which directly influences the outcome of the model and reduces computation time. Here the standard deviation of each variable is computed and variables with zero or near-zero variance or standard deviation are excluded. Using these variables in models would create no benefit and are not descriptive of the value to be predicted.
+
+```{r preprocessing, warning=FALSE, message=FALSE}
+#create a matrix of the data
+x <- as.matrix(x_train)
+
+#calculates the standard deviation for each column
+sds <- colSds(x)
+
+#calculate the variables, which have zero or near-zero variability
+nzv <- nearZeroVar(x)
+
+```
+
+These are the variables excluded going forward.
+
+```{r useless variables, warning=FALSE, message=FALSE}
+#show the column names of zero or near-zero variablity
+colnames(as.data.frame(x)[nzv])
+```
+
+These are the useful variables and are included in modelling.
+
+```{r useful variables, warning=FALSE, message=FALSE}
+#show the column names of the columns we will work with
+col_index <- setdiff(1:ncol(x), nzv)
+colnames(as.data.frame(x)[col_index])
+
+#change x_train and x_test to inlcude only useful variables
+x_train <- x_train[col_index]
+x_test <- x_test[col_index]
+```
+
+
+#### Evaluation Function
+
+Loss function (RMSE) is used throughout the analysis in order to evaluate the performance of the model. The ouptput of the function shows how much the prediction deviates from the actual result.
+
+
+#### Quadratic Discriminant Analysis
+
+Firstly, this algorithm identifies the distribution of each variable for each level of severity. Then it flips the distribution so that it is possible to calculate the level of severity for each row of the observation. The result of this algorithm is 0.594, which means the prediction deviates from the actual result by ca 0.6 points.
+
+```{r QDA,warning=FALSE, message=FALSE}
+#train with qda model
+fit_qda <- train(x_train, y_train, method = "qda")
+#predict with  model
+y_hat <- predict(fit_qda, x_test)
+#show accuracy
+qda_rmse <- rmse(y_test, y_hat)
+qda_rmse 
+#create a table for storing results
+rmse_results <- tibble(method = "QDA", RMSE = qda_rmse)
+```
+
+
+#### Decision Tree
+
+This algorithm partitions the data into regions with one variable at a time with nodes at the end of them that represent decision points. The data is split until the final node, which gives the prediction. 
+
+Cross-validation is used to choose the complexity parameter. The best value for a complecity parameter is 0.
+
+```{r tune hyperparameters, warning=FALSE, message=FALSE, cache=TRUE}
+fit_rpart <- train(x_train, as.numeric(y_train),
+                     method = "rpart",
+                    tuneGrid = data.frame(cp = seq(0.0, 0.1, len = 25)))
+#plot rmse on each parameter
+plot(fit_rpart)
+fit_rpart$bestTune
+```
+
+The decision tree algorithm gives the result of 0.377. This model performs better than QDA method.
+
+```{r predict and show result, warning=FALSE, message=FALSE, cache=TRUE}
+#predict with  model
+y_hat <- predict(fit_rpart, x_test)
+#show result
+rpart_rmse <- rmse(y_test, y_hat)
+rpart_rmse 
+#add result to the table
+rmse_results <- add_row(rmse_results, method = "RPART", RMSE = rpart_rmse)
+```
+
+
+#### Decision Trees with Stochastic Gradient Boosting
+
+In this method, the decision trees are grown sequentially: each successive tree is grown using information from previously grown trees, with the aim to minimize the error of the previous models. Cross-validation with 10 fols is used to find the best hyperparameters for the model. 
+
+```{r tree hyperparameter, warning=FALSE, message=FALSE, cache=TRUE}
+set.seed(123, sample.kind = "Rounding")
+
+xbg_fit <- train(x_test, as.numeric(y_test),
+                    method = "xgbTree",
+                    trControl = trainControl("cv", number = 10))
+#show best tune
+xbg_fit$bestTune
+```
+
+The result is 0.386, which is worse than the previous model. 
+
+```{r tree model, warning=FALSE, message=FALSE, cache=TRUE}
+#predict with  model
+y_hat <- predict(xbg_fit, x_test)
+#show result
+xbg_rmse <- rmse(y_test, y_hat)
+xbg_rmse 
+#add result to the table
+rmse_results <- add_row(rmse_results, method = "XBG", RMSE = xbg_rmse)
+```
+
+#### Generalized Linear Model with Gradient Descent and Regularization
+
+This model builds generalized linear model and optimizes it usin regularization and gradient descent. Gradient descent tries to optimize the loss function by tuning different values of coefficients to minimize the error. In this algorithm, the subsequent models are built on residuals (actual - prediction) generated by previous examples. 
+Firstly, the parameters are tuned with cross validation and then the model is fitted. 
+
+```{r gblinear, warning=FALSE, message=FALSE, cache=TRUE}
+xgb_trcontrol = trainControl(
+  method = "cv",
+  number = 5,  
+  allowParallel = TRUE,
+  verboseIter = FALSE,
+  returnData = FALSE
+)
+
+xbg_l_fit <- train(x_test, as.numeric(y_test),
+                 method = "xgbLinear",
+                 trControl = xgb_trcontrol)
+                 
+y_hat <- predict(xbg_l_fit, x_test)
+
+xbg_l_rmse <- rmse(y_test, y_hat)
+xbg_l_rmse 
+
+rmse_results <- add_row(rmse_results, method = "XBG_L", RMSE = xbg_l_rmse)
+```
+
+The result is 0.32, which is the best perfoming model.
+
+
+### Conclusion
+
+In this report, 4 different models were fitted to find the best model. 
+
+```{r show results}
+rmse_results
+```
+
+The best model was found using Generalized Linear Model with Gradient Descent and Regularization. Desicion Tree model and Boosted Decision Trees model could have performed better if with further tuned parameters to fit the best model. Also, Principal Component Analysis could be run with missing values to provide an estimates for them and therefore not lose any possible statistical characteristics of variables.
+
+
+### Acknowledgements
+
+US-Accidents: A Countrywide Traffic Accident Dataset https://smoosavi.org/datasets/us_accidents
+
+Beginners Tutorial on XGBoost and Parameter Tuning in R
+https://www.hackerearth.com/practice/machine-learning/machine-learning-algorithms/beginners-tutorial-on-xgboost-parameter-tuning-r/tutorial/
+
+Statistical Machine Learning Essentials
+http://www.sthda.com/english/articles/35-statistical-machine-learning-essentials/139-gradient-boosting-essentials-in-r-using-xgboost/
